@@ -90,7 +90,6 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                 image_data_list = []
                 file_name_mapping = []
-                all_uploaded_filenames = [f.name for f in uploaded_files]
                 
                 for idx, file in enumerate(uploaded_files):
                     img = PIL.Image.open(file)
@@ -115,7 +114,7 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 ・日付が一致しない場合、各照合項目を「対象外(日付不一致)」とし、不一致の内容に「指定された調査対象日（{target_date_str}）と異なります」と記録してください。
                 
                 【基本照合項目（左側の「【売上集計表】レジ精算総計」と、右側の集計欄の数値を比較）】
-                1.現金在高  2.過不足  3.商品券  4.キャッシュレス  5.入金額
+                1.現金を高  2.過不足  3.商品券  4.キャッシュレス  5.入金額
                 
                 【追加の照合条件（ミスパンチ・返金）】
                 ・売上日計表に記載されている「ミスパンチ」および「返金」の金額を確認してください。
@@ -158,8 +157,14 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                 st.success("✅ 解析および突合が完了しました！")
 
+                # DataFrame作成とPyArrowエラー防止の型変換（すべて文字列化）
                 df_results = pd.DataFrame(result_data)
+                if not df_results.empty:
+                    df_results = df_results.astype(str)
+
                 df_unreadable = pd.DataFrame({"判別不能ファイル名": unreadable_files, "理由": "画像不鮮明・判別不能につき無視"}) if unreadable_files else pd.DataFrame()
+                if not df_unreadable.empty:
+                    df_unreadable = df_unreadable.astype(str)
 
                 # --- 未提出店舗の抽出ロジック（対象日一致データのみで集計） ---
                 df_unsubmitted = pd.DataFrame()
@@ -172,6 +177,7 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                     df_unsubmitted = master_df[~master_df["店舗名"].astype(str).str.strip().isin(extracted_stores)].copy()
                     df_unsubmitted["提出ステータス"] = "未提出"
+                    df_unsubmitted = df_unsubmitted.astype(str)
 
                 # --- 画面表示（タブ分け） ---
                 tab1, tab2, tab3 = st.tabs([
