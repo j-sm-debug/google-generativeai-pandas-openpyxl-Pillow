@@ -90,6 +90,7 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                 image_data_list = []
                 file_name_mapping = []
+                all_uploaded_filenames = [f.name for f in uploaded_files]
                 
                 for idx, file in enumerate(uploaded_files):
                     img = PIL.Image.open(file)
@@ -99,10 +100,14 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 mapping_text = "\n".join(file_name_mapping)
 
                 prompt = f"""
-                以下の売上日計表の画像（{len(uploaded_files)}枚）を読み取り、各画像について数値を照合し、JSONの配列形式で出力してください。
+                以下の売上日計表の画像（{len(uploaded_files)}枚）を読み取り、各画像について数値を照合し、JSONオブジェクト形式で出力してください。
                 
                 【アップロードされたファイル名と画像の順序】
                 {mapping_text}
+                
+                【重要：判別不能・不明画像の無視（スキップ）ルール】
+                ・画像がブレている、極度に不鮮明、見切れている、または売上日計表ではないなどの理由で**数値や店舗名が判別・判断できない画像**は、照合対象から完全に除外（無視）してください。
+                ・除外した画像のファイル名は `unreadable_files` 配列に記載してください。
                 
                 【重要：調査対象日フィルター規則】
                 ・指定の調査対象日：{target_date_str}
@@ -118,51 +123,62 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 ・「返金」の金額が0円でない場合：「返金ミスパンチ貼付用紙」の「返金合計」と数値を照合してください。
                 ・金額が0円または記載がない場合は、ステータスを「対象外(0円)」としてください。
                 
-                【重要な指示】
-                ・同一内容（同じ店舗、同じ日付、同じ数値）の画像が複数含まれている場合は重複を排除し、1つのデータとしてまとめてください。
-                ・「ファイル名」の値には、上記のファイル名リストを参照し、該当する正しいファイル名を記載してください（重複時はカンマ区切り）。
-                
                 【出力フォーマット】
-                [
-                  {{
-                    "ファイル名": "...", 
-                    "店舗名": "店舗名", 
-                    "日付": "YYYY/MM/DD", 
-                    "現金在高": "一致/不一致/対象外(日付不一致)",
-                    "過不足": "一致/不一致/対象外(日付不一致)",
-                    "商品券": "一致/不一致/対象外(日付不一致)",
-                    "キャッシュレス": "一致/不一致/対象外(日付不一致)",
-                    "入金額": "一致/不一致/対象外(日付不一致)",
-                    "ミスパンチ照合": "一致/不一致/対象外(0円)/対象外(日付不一致)",
-                    "返金照合": "一致/不一致/対象外(0円)/対象外(日付不一致)",
-                    "不一致の内容": "詳細（すべて一致・対象外の場合は 'なし'）"
-                  }}
-                ]
+                {{
+                  "results": [
+                    {{
+                      "ファイル名": "...", 
+                      "店舗名": "店舗名", 
+                      "日付": "YYYY/MM/DD", 
+                      "現金在高": "一致/不一致/対象外(日付不一致)",
+                      "過不足": "一致/不一致/対象外(日付不一致)",
+                      "商品券": "一致/不一致/対象外(日付不一致)",
+                      "キャッシュレス": "一致/不一致/対象外(日付不一致)",
+                      "入金額": "一致/不一致/対象外(日付不一致)",
+                      "ミスパンチ照合": "一致/不一致/対象外(0円)/対象外(日付不一致)",
+                      "返金照合": "一致/不一致/対象外(0円)/対象外(日付不一致)",
+                      "不一致の内容": "詳細（すべて一致・対象外の場合は 'なし'）"
+                    }}
+                  ],
+                  "unreadable_files": ["判別不能なファイル名1.jpg", "..."]
+                }}
                 """
 
                 contents = [prompt] + image_data_list
                 response = model.generate_content(contents)
-                result_data = json.loads(response.text)
+                raw_json = json.loads(response.text)
+
+                # 結果データと判別不能ファイルリストの分離
+                if isinstance(raw_json, dict):
+                    result_data = raw_json.get("results", [])
+                    unreadable_files = raw_json.get("unreadable_files", [])
+                else:
+                    result_data = raw_json
+                    unreadable_files = []
 
                 st.success("✅ 解析および突合が完了しました！")
 
                 df_results = pd.DataFrame(result_data)
+                df_unreadable = pd.DataFrame({"判別不能ファイル名": unreadable_files, "理由": "画像不鮮明・判別不能につき無視"}) if unreadable_files else pd.DataFrame()
 
                 # --- 未提出店舗の抽出ロジック（対象日一致データのみで集計） ---
                 df_unsubmitted = pd.DataFrame()
                 if master_df is not None and "店舗名" in master_df.columns:
-                    # 日付不一致を除外した有効な提出分店舗のみを抽出
-                    if "現金在高" in df_results.columns:
+                    if not df_results.empty and "現金在高" in df_results.columns:
                         valid_results = df_results[~df_results["現金在高"].astype(str).str.contains("日付不一致")]
+                        extracted_stores = valid_results["店舗名"].astype(str).str.replace("ジェーソン", "").str.strip().unique()
                     else:
-                        valid_results = df_results
+                        extracted_stores = []
 
-                    extracted_stores = valid_results["店舗名"].astype(str).str.replace("ジェーソン", "").str.strip().unique()
                     df_unsubmitted = master_df[~master_df["店舗名"].astype(str).str.strip().isin(extracted_stores)].copy()
                     df_unsubmitted["提出ステータス"] = "未提出"
 
                 # --- 画面表示（タブ分け） ---
-                tab1, tab2 = st.tabs(["📊 照合結果（提出分）", f"⚠️ 未提出店舗一覧（{len(df_unsubmitted)}店舗）" if not df_unsubmitted.empty else "⚠️ 未提出店舗一覧"])
+                tab1, tab2, tab3 = st.tabs([
+                    "📊 照合結果（提出分）", 
+                    f"⚠️ 未提出店舗一覧（{len(df_unsubmitted)}店舗）" if not df_unsubmitted.empty else "⚠️ 未提出店舗一覧",
+                    f"🚫 判別不能・無視ファイル（{len(unreadable_files)}件）" if unreadable_files else "🚫 判別不能・無視ファイル"
+                ])
 
                 def highlight_mismatch(val):
                     if val == '不一致':
@@ -173,7 +189,10 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                 with tab1:
                     st.subheader(f"提出分・数値照合結果（対象日: {target_date_str}）")
-                    st.dataframe(df_results.style.map(highlight_mismatch), use_container_width=True)
+                    if not df_results.empty:
+                        st.dataframe(df_results.style.map(highlight_mismatch), use_container_width=True)
+                    else:
+                        st.info("有効な照合対象データがありませんでした。")
 
                 with tab2:
                     st.subheader("未提出店舗リスト")
@@ -183,12 +202,22 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                     else:
                         st.info("すべての対象店舗の画像が提出されています。")
 
+                with tab3:
+                    st.subheader("判別不能・無視されたファイル")
+                    if unreadable_files:
+                        st.error(f"以下の **{len(unreadable_files)}件** の画像は画質不良または不整合のため判別できず、照合から除外されました。")
+                        st.dataframe(df_unreadable, use_container_width=True)
+                    else:
+                        st.success("判別不能・無視された画像はありませんでした。すべての画像が正常に処理されました。")
+
                 # --- Excelファイルの生成 ---
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_results.to_excel(writer, index=False, sheet_name="照合結果")
                     if not df_unsubmitted.empty:
                         df_unsubmitted.to_excel(writer, index=False, sheet_name="未提出店舗一覧")
+                    if not df_unreadable.empty:
+                        df_unreadable.to_excel(writer, index=False, sheet_name="判別不能ファイル一覧")
 
                 output.seek(0)
                 wb = openpyxl.load_workbook(output)
@@ -203,58 +232,37 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 gray_fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
                 alt_fill = PatternFill(start_color="F9F9F9", end_color="F9F9F9", fill_type="solid")
 
-                # シート1の装飾
-                ws1 = wb["照合結果"]
-                for cell in ws1[1]:
-                    cell.fill = header_fill
-                    cell.font = header_font
-                    cell.alignment = alignment_center
-                    cell.border = thin_border
-
-                for row_idx, row in enumerate(ws1.iter_rows(min_row=2, max_row=ws1.max_row, min_col=1, max_col=ws1.max_column), start=2):
-                    for col_idx, cell in enumerate(row):
-                        cell.border = thin_border
-                        if col_idx in [0, 1, 10]:
-                            cell.alignment = alignment_left
-                        else:
-                            cell.alignment = alignment_center
-                        if row_idx % 2 == 0:
-                            cell.fill = alt_fill
-                        if cell.value == "不一致":
-                            cell.fill = red_fill
-                        elif cell.value == "対象外(日付不一致)":
-                            cell.fill = gray_fill
-
-                widths1 = {'A': 20, 'B': 25, 'C': 15, 'D': 15, 'E': 15, 'F': 15, 'G': 15, 'H': 15, 'I': 18, 'J': 18, 'K': 50}
-                for col, width in widths1.items():
-                    ws1.column_dimensions[col].width = width
-
-                # シート2の装飾
-                if "未提出店舗一覧" in wb.sheetnames:
-                    ws2 = wb["未提出店舗一覧"]
-                    for cell in ws2[1]:
+                # シートの装飾共通処理
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    for cell in ws[1]:
                         cell.fill = header_fill
                         cell.font = header_font
                         cell.alignment = alignment_center
                         cell.border = thin_border
 
-                    for row_idx, row in enumerate(ws2.iter_rows(min_row=2, max_row=ws2.max_row, min_col=1, max_col=ws2.max_column), start=2):
+                    for row_idx, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column), start=2):
                         for col_idx, cell in enumerate(row):
                             cell.border = thin_border
-                            cell.alignment = alignment_left
+                            if sheet_name == "照合結果" and col_idx not in [0, 1, 10]:
+                                cell.alignment = alignment_center
+                            else:
+                                cell.alignment = alignment_left
+
                             if row_idx % 2 == 0:
                                 cell.fill = alt_fill
 
-                    widths2 = {'A': 15, 'B': 25, 'C': 15}
-                    for col, width in widths2.items():
-                        ws2.column_dimensions[col].width = width
+                            if cell.value == "不一致":
+                                cell.fill = red_fill
+                            elif cell.value == "対象外(日付不一致)":
+                                cell.fill = gray_fill
 
                 final_output = io.BytesIO()
                 wb.save(final_output)
                 excel_data = final_output.getvalue()
 
                 st.download_button(
-                    label="📥 照合結果＆未提出リスト（Excel）をダウンロード",
+                    label="📥 照合結果・未提出・不明ファイルリスト（Excel）をダウンロード",
                     data=excel_data,
                     file_name="売上照合および未提出店舗報告書.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
