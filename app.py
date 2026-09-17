@@ -12,11 +12,13 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 # --- ページ設定 ---
 st.set_page_config(page_title="売上日計表 自動照合システム", layout="wide")
 
-# --- セッション状態（データ蓄積用メモリ）の初期化 ---
+# --- セッション状態（データ蓄積用メモリ・キー）の初期化 ---
 if "accumulated_results" not in st.session_state:
     st.session_state["accumulated_results"] = pd.DataFrame()
 if "accumulated_unreadable" not in st.session_state:
     st.session_state["accumulated_unreadable"] = pd.DataFrame()
+if "file_uploader_key" not in st.session_state:
+    st.session_state["file_uploader_key"] = 0
 
 # --- ログイン認証処理 ---
 def check_password():
@@ -128,22 +130,33 @@ st.subheader("3. 日計表画像のアップロード")
 uploaded_files = st.file_uploader(
     "売上日計表の画像をアップロードしてください（複数選択可・順次追加可能）", 
     type=['png', 'jpg', 'jpeg'], 
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    key=f"uploader_{st.session_state['file_uploader_key']}"
 )
 
-btn_col1, btn_col2 = st.columns([2, 1])
+# ボタンの3列レイアウト配置
+btn_col1, btn_col2, btn_col3 = st.columns([1.5, 1.5, 1.5])
 
 with btn_col1:
-    start_btn = st.button("照合を追加実行する", type="primary")
+    start_btn = st.button("🚀 照合を追加実行する", type="primary", use_container_width=True)
 
 with btn_col2:
-    clear_btn = st.button("🗑️ 全調査完了（全結果データをクリアする）", type="secondary")
+    clear_file_btn = st.button("📁 アップロード選択欄をクリア（結果は残す）", use_container_width=True)
+
+with btn_col3:
+    clear_all_btn = st.button("🗑️ 全調査完了（全結果データをクリアする）", use_container_width=True)
+
+# --- アップロード選択欄のみクリアする処理 ---
+if clear_file_btn:
+    st.session_state["file_uploader_key"] += 1
+    st.rerun()
 
 # --- 全結果クリアの処理 ---
-if clear_btn:
+if clear_all_btn:
     st.session_state["accumulated_results"] = pd.DataFrame()
     st.session_state["accumulated_unreadable"] = pd.DataFrame()
-    st.success("🧹 過去の照合結果をすべてクリア（リセット）しました。")
+    st.session_state["file_uploader_key"] += 1
+    st.success("🧹 照合結果データをすべてリセットしました。")
     st.rerun()
 
 # --- 照合処理実行 ---
@@ -241,7 +254,7 @@ if start_btn:
 
                 new_df_results = pd.DataFrame(result_data)
                 
-                # 店舗名の補正
+                # 店舗名の自動補正
                 if not new_df_results.empty:
                     new_df_results = normalize_and_fix_store_names(new_df_results, master_df)
                     for col in new_df_results.columns:
@@ -252,7 +265,7 @@ if start_btn:
                     for col in new_df_unreadable.columns:
                         new_df_unreadable[col] = new_df_unreadable[col].astype(str)
 
-                # --- セッション蓄積データとの結合および重複削除 ---
+                # --- 既存データへの追記と重複排除 ---
                 if not new_df_results.empty:
                     combined_res = pd.concat([st.session_state["accumulated_results"], new_df_results], ignore_index=True)
                     st.session_state["accumulated_results"] = combined_res.drop_duplicates(subset=["ファイル名"], keep="first")
@@ -266,12 +279,12 @@ if start_btn:
             except Exception as e:
                 st.error(f"システムエラーが発生しました: {e}")
 
-# --- 画面表示およびレポート出力部（セッション内の全データを使用） ---
+# --- 画面表示部（累積データを表示） ---
 df_results = st.session_state["accumulated_results"]
 df_unreadable = st.session_state["accumulated_unreadable"]
 
 if not df_results.empty or not df_unreadable.empty:
-    # 未提出店舗の抽出ロジック
+    # 未提出店舗の抽出
     df_unsubmitted = pd.DataFrame()
     if master_df is not None and "店舗名" in master_df.columns:
         if not df_results.empty and ("現金を高" in df_results.columns or "現金在高" in df_results.columns):
@@ -321,7 +334,7 @@ if not df_results.empty or not df_unreadable.empty:
         else:
             st.success("判別不能・無視された画像はありません。")
 
-    # Excelファイルの生成（全累積データを出力）
+    # Excelファイル生成
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_results.empty:
