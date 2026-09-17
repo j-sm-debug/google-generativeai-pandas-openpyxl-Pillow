@@ -55,9 +55,9 @@ if st.button("照合を開始する", type="primary"):
         with st.spinner("画像を解析中です...（枚数によって数十秒〜数分かかります）"):
             try:
                 genai.configure(api_key=api_key)
-                # モデル名を gemini-2.5-flash に設定
+                # エラー指示に従いモデル名を gemini-3.6-flash に変更
                 model = genai.GenerativeModel(
-                    'gemini-2.5-flash',
+                    'gemini-3.6-flash',
                     generation_config={"response_mime_type": "application/json"}
                 )
 
