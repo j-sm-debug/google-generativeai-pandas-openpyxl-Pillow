@@ -114,7 +114,7 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 ・日付が一致しない場合、各照合項目を「対象外(日付不一致)」とし、不一致の内容に「指定された調査対象日（{target_date_str}）と異なります」と記録してください。
                 
                 【基本照合項目（左側の「【売上集計表】レジ精算総計」と、右側の集計欄の数値を比較）】
-                1.現金を高  2.過不足  3.商品券  4.キャッシュレス  5.入金額
+                1.現金在高  2.過不足  3.商品券  4.キャッシュレス  5.入金額
                 
                 【追加の照合条件（ミスパンチ・返金）】
                 ・売上日計表に記載されている「ミスパンチ」および「返金」の金額を確認してください。
@@ -147,7 +147,6 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 response = model.generate_content(contents)
                 raw_json = json.loads(response.text)
 
-                # 結果データと判別不能ファイルリストの分離
                 if isinstance(raw_json, dict):
                     result_data = raw_json.get("results", [])
                     unreadable_files = raw_json.get("unreadable_files", [])
@@ -157,16 +156,18 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                 st.success("✅ 解析および突合が完了しました！")
 
-                # DataFrame作成とPyArrowエラー防止の型変換（すべて文字列化）
+                # PyArrowエラー（型不整合エラー）を防止するため全列を文字列化
                 df_results = pd.DataFrame(result_data)
                 if not df_results.empty:
-                    df_results = df_results.astype(str)
+                    for col in df_results.columns:
+                        df_results[col] = df_results[col].astype(str)
 
                 df_unreadable = pd.DataFrame({"判別不能ファイル名": unreadable_files, "理由": "画像不鮮明・判別不能につき無視"}) if unreadable_files else pd.DataFrame()
                 if not df_unreadable.empty:
-                    df_unreadable = df_unreadable.astype(str)
+                    for col in df_unreadable.columns:
+                        df_unreadable[col] = df_unreadable[col].astype(str)
 
-                # --- 未提出店舗の抽出ロジック（対象日一致データのみで集計） ---
+                # 未提出店舗の抽出ロジック
                 df_unsubmitted = pd.DataFrame()
                 if master_df is not None and "店舗名" in master_df.columns:
                     if not df_results.empty and "現金在高" in df_results.columns:
@@ -177,9 +178,10 @@ if st.button("照合と未提出確認を開始する", type="primary"):
 
                     df_unsubmitted = master_df[~master_df["店舗名"].astype(str).str.strip().isin(extracted_stores)].copy()
                     df_unsubmitted["提出ステータス"] = "未提出"
-                    df_unsubmitted = df_unsubmitted.astype(str)
+                    for col in df_unsubmitted.columns:
+                        df_unsubmitted[col] = df_unsubmitted[col].astype(str)
 
-                # --- 画面表示（タブ分け） ---
+                # 画面表示（タブ分け）
                 tab1, tab2, tab3 = st.tabs([
                     "📊 照合結果（提出分）", 
                     f"⚠️ 未提出店舗一覧（{len(df_unsubmitted)}店舗）" if not df_unsubmitted.empty else "⚠️ 未提出店舗一覧",
@@ -216,7 +218,7 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                     else:
                         st.success("判別不能・無視された画像はありませんでした。すべての画像が正常に処理されました。")
 
-                # --- Excelファイルの生成 ---
+                # Excelファイルの生成
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_results.to_excel(writer, index=False, sheet_name="照合結果")
@@ -238,7 +240,6 @@ if st.button("照合と未提出確認を開始する", type="primary"):
                 gray_fill = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
                 alt_fill = PatternFill(start_color="F9F9F9", end_color="F9F9F9", fill_type="solid")
 
-                # シートの装飾共通処理
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
                     for cell in ws[1]:
