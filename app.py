@@ -55,10 +55,10 @@ if st.button("照合を開始する", type="primary"):
         with st.spinner("画像を解析中です...（枚数によって数十秒〜数分かかります）"):
             try:
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel(
-                    'gemini-2.5-flash',
-                    generation_config={"response_mime_type": "application/json"}
-                )
+model = genai.GenerativeModel(
+    'gemini-1.5-flash',
+    generation_config={"response_mime_type": "application/json"}
+)
 
                 image_data_list = []
                 file_name_mapping = []
