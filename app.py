@@ -9,16 +9,37 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 # --- ページ設定 ---
 st.set_page_config(page_title="売上日計表 自動照合システム", layout="wide")
+
+# --- ログイン認証処理 ---
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if st.session_state["password_correct"]:
+        return True
+
+    st.title("🔒 社内関係者専用ログイン")
+    password_input = st.text_input("パスワードを入力してください", type="password")
+    
+    if st.button("ログイン"):
+        if password_input == st.secrets.get("PASSWORD"):
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("パスワードが正しくありません。")
+    
+    return False
+
+if not check_password():
+    st.stop()
+
+# --- メイン画面 ---
 st.title("📊 売上日計表 自動照合システム")
+st.markdown("店舗から送られてきた売上日計表の画像をアップロードするだけで、数値を自動照合し、結果をExcelで出力します。")
 
-st.markdown("""
-店舗から送られてきた売上日計表の画像をアップロードするだけで、数値を自動照合し、結果をExcelで出力します。
-""")
+# SecretsからAPIキーを取得
+api_key = st.secrets.get("GEMINI_API_KEY")
 
-# --- APIキーの入力 ---
-api_key = st.text_input("Gemini APIキーを入力してください", type="password")
-
-# --- 画像アップロード ---
 uploaded_files = st.file_uploader(
     "売上日計表の画像をアップロードしてください（複数選択可・ドラッグ＆ドロップ対応）", 
     type=['png', 'jpg', 'jpeg'], 
@@ -27,13 +48,12 @@ uploaded_files = st.file_uploader(
 
 if st.button("照合を開始する", type="primary"):
     if not api_key:
-        st.error("APIキーを入力してください。")
+        st.error("システムエラー: APIキーが設定されていません。StreamlitのSecretsを設定してください。")
     elif not uploaded_files:
         st.warning("画像を1枚以上アップロードしてください。")
     else:
         with st.spinner("画像を解析中です...（枚数によって数十秒〜数分かかります）"):
             try:
-                # モデルの初期化
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel(
                     'gemini-2.5-flash',
@@ -43,7 +63,6 @@ if st.button("照合を開始する", type="primary"):
                 image_data_list = []
                 file_name_mapping = []
                 
-                # 画像データとファイル名の紐付け
                 for idx, file in enumerate(uploaded_files):
                     img = PIL.Image.open(file)
                     image_data_list.append(img)
@@ -51,7 +70,6 @@ if st.button("照合を開始する", type="primary"):
                 
                 mapping_text = "\n".join(file_name_mapping)
 
-                # 命令文
                 prompt = f"""
                 以下の売上日計表の画像（{len(uploaded_files)}枚）を読み取り、各画像について5項目を照合し、JSONの配列形式で出力してください。
                 
@@ -81,14 +99,12 @@ if st.button("照合を開始する", type="primary"):
                 ]
                 """
 
-                # API実行
                 contents = [prompt] + image_data_list
                 response = model.generate_content(contents)
                 result_data = json.loads(response.text)
 
                 st.success("✅ 解析が完了しました！")
 
-                # 結果をデータフレームに変換
                 df = pd.DataFrame(result_data)
                 
                 def highlight_mismatch(val):
@@ -98,7 +114,6 @@ if st.button("照合を開始する", type="primary"):
                 st.subheader("照合結果")
                 st.dataframe(df.style.map(highlight_mismatch), use_container_width=True)
 
-                # --- Excelファイルの生成と装飾処理 ---
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df.to_excel(writer, index=False, sheet_name="照合結果")
