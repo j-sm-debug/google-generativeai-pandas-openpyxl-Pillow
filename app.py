@@ -12,7 +12,7 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 # --- ページ設定 ---
 st.set_page_config(page_title="売上日計表 自動照合システム", layout="wide")
 
-# --- セッション状態（データおよびマスタ保持用メモリ）の初期化 ---
+# --- セッション状態の初期化 ---
 if "accumulated_results" not in st.session_state:
     st.session_state["accumulated_results"] = pd.DataFrame()
 if "accumulated_unreadable" not in st.session_state:
@@ -98,31 +98,32 @@ def normalize_and_fix_store_names(df_results, master_df):
 
 # --- メイン画面 ---
 st.title("📊 売上日計表 自動照合システム")
-st.markdown("店舗からの売上日計表画像を自動照合し、全店舗マスタ（店舗.xlsx）と比較して**未提出店舗の抽出**およびExcel報告書を出力します。")
+st.markdown("店舗からの売上日計表画像を自動照合し、全店舗マスタと比較して**未提出店舗の抽出**およびExcel報告書を出力します。")
 
 # SecretsからAPIキーを取得
 api_key = st.secrets.get("GEMINI_API_KEY")
 
-# 1. 店舗マスタの読み込み（セッション永続化＆自動読込対応）
-st.subheader("1. 店舗マスタ（調査対象店舗リスト）")
-
-master_file = st.file_uploader("店舗マスタ（店舗.xlsx）を更新・変更する場合のみアップロードしてください", type=['xlsx', 'xls'])
-
-if master_file is not None:
-    st.session_state["master_df"] = pd.read_excel(master_file)
-    st.info("Uploaded: アップロードされた最新の店舗マスタを使用します。")
-elif st.session_state["master_df"] is None and os.path.exists("店舗.xlsx"):
+# 1. 店舗マスタの自動読み込み
+if st.session_state["master_df"] is None and os.path.exists("店舗.xlsx"):
     st.session_state["master_df"] = pd.read_excel("店舗.xlsx")
 
 master_df = st.session_state["master_df"]
 
 if master_df is not None:
-    st.success(f"✅ 店舗マスタ読み込み完了（登録店舗数: {len(master_df)}店舗）。毎回の再アップロードは不要です。")
+    st.success(f"✅ 店舗マスタ自動読み込み完了（全 {len(master_df)} 店舗のマスタが適用されています）。ファイル選択は不要です。")
 else:
-    st.warning("⚠️ 店舗マスタが登録されていません。GitHubリポジトリに `店舗.xlsx` を配置するか、上記からアップロードしてください。")
+    st.warning("⚠️ 店舗マスタ（店舗.xlsx）が見つかりません。")
+
+# マスタ変更時のみ開くオプショナルメニュー
+with st.expander("⚙️ 店舗マスタ（店舗.xlsx）を変更・更新したい場合のみ開く"):
+    master_file = st.file_uploader("新しい店舗マスタ（Excel）をアップロード", type=['xlsx', 'xls'])
+    if master_file is not None:
+        st.session_state["master_df"] = pd.read_excel(master_file)
+        master_df = st.session_state["master_df"]
+        st.success("店舗マスタを新しいファイルに更新しました。")
 
 # 2. 調査対象日の設定
-st.subheader("2. 調査対象日の設定")
+st.subheader("1. 調査対象日の設定")
 col1, col2 = st.columns([1, 2])
 with col1:
     ignore_date_check = st.checkbox("調査対象日を指定しない（すべての画像を取り込む）", value=False)
@@ -132,7 +133,7 @@ with col2:
 target_date_str = "指定なし（全日付を照合対象とする）" if ignore_date_check else target_date.strftime("%Y/%m/%d")
 
 # 3. 画像アップロード
-st.subheader("3. 日計表画像のアップロード")
+st.subheader("2. 日計表画像のアップロード")
 uploaded_files = st.file_uploader(
     "売上日計表の画像をアップロードしてください（複数選択可・順次追加可能）", 
     type=['png', 'jpg', 'jpeg'], 
@@ -140,7 +141,7 @@ uploaded_files = st.file_uploader(
     key=f"uploader_{st.session_state['file_uploader_key']}"
 )
 
-# ボタンの3列レイアウト配置
+# ボタンレイアウト
 btn_col1, btn_col2, btn_col3 = st.columns([1.5, 1.5, 1.5])
 
 with btn_col1:
@@ -152,12 +153,12 @@ with btn_col2:
 with btn_col3:
     clear_all_btn = st.button("🗑️ 全調査完了（全結果データをクリアする）", use_container_width=True)
 
-# --- アップロード選択欄のみクリアする処理 ---
+# アップロード枠のみクリア
 if clear_file_btn:
     st.session_state["file_uploader_key"] += 1
     st.rerun()
 
-# --- 全結果クリアの処理 ---
+# 全データクリア
 if clear_all_btn:
     st.session_state["accumulated_results"] = pd.DataFrame()
     st.session_state["accumulated_unreadable"] = pd.DataFrame()
@@ -165,7 +166,7 @@ if clear_all_btn:
     st.success("🧹 照合結果データをすべてリセットしました。")
     st.rerun()
 
-# --- 照合処理実行 ---
+# 照合実行
 if start_btn:
     if not api_key:
         st.error("システムエラー: APIキーが設定されていません。StreamlitのSecretsを設定してください。")
@@ -270,7 +271,7 @@ if start_btn:
                     for col in new_df_unreadable.columns:
                         new_df_unreadable[col] = new_df_unreadable[col].astype(str)
 
-                # --- 既存データへの追記と重複排除 ---
+                # 追記と重複排除
                 if not new_df_results.empty:
                     combined_res = pd.concat([st.session_state["accumulated_results"], new_df_results], ignore_index=True)
                     st.session_state["accumulated_results"] = combined_res.drop_duplicates(subset=["ファイル名"], keep="first")
@@ -284,7 +285,7 @@ if start_btn:
             except Exception as e:
                 st.error(f"システムエラーが発生しました: {e}")
 
-# --- 画面表示部（累積データを表示） ---
+# 画面表示部
 df_results = st.session_state["accumulated_results"]
 df_unreadable = st.session_state["accumulated_unreadable"]
 
