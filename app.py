@@ -12,13 +12,15 @@ from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 # --- ページ設定 ---
 st.set_page_config(page_title="売上日計表 自動照合システム", layout="wide")
 
-# --- セッション状態（データ蓄積用メモリ・キー）の初期化 ---
+# --- セッション状態（データおよびマスタ保持用メモリ）の初期化 ---
 if "accumulated_results" not in st.session_state:
     st.session_state["accumulated_results"] = pd.DataFrame()
 if "accumulated_unreadable" not in st.session_state:
     st.session_state["accumulated_unreadable"] = pd.DataFrame()
 if "file_uploader_key" not in st.session_state:
     st.session_state["file_uploader_key"] = 0
+if "master_df" not in st.session_state:
+    st.session_state["master_df"] = None
 
 # --- ログイン認証処理 ---
 def check_password():
@@ -101,19 +103,23 @@ st.markdown("店舗からの売上日計表画像を自動照合し、全店舗�
 # SecretsからAPIキーを取得
 api_key = st.secrets.get("GEMINI_API_KEY")
 
-# 1. 店舗マスタの読み込み
+# 1. 店舗マスタの読み込み（セッション永続化＆自動読込対応）
 st.subheader("1. 店舗マスタ（調査対象店舗リスト）")
-master_file = st.file_uploader("店舗マスタ（店舗.xlsx）を更新する場合はアップロードしてください（任意）", type=['xlsx', 'xls'])
 
-master_df = None
-if master_file:
-    master_df = pd.read_excel(master_file)
-    st.info("Uploaded: カスタム店舗マスタを使用します。")
-elif os.path.exists("店舗.xlsx"):
-    master_df = pd.read_excel("店舗.xlsx")
-    st.success("✅ リポジトリ内の `店舗.xlsx`（116店舗）を自動読み込みしました。")
+master_file = st.file_uploader("店舗マスタ（店舗.xlsx）を更新・変更する場合のみアップロードしてください", type=['xlsx', 'xls'])
+
+if master_file is not None:
+    st.session_state["master_df"] = pd.read_excel(master_file)
+    st.info("Uploaded: アップロードされた最新の店舗マスタを使用します。")
+elif st.session_state["master_df"] is None and os.path.exists("店舗.xlsx"):
+    st.session_state["master_df"] = pd.read_excel("店舗.xlsx")
+
+master_df = st.session_state["master_df"]
+
+if master_df is not None:
+    st.success(f"✅ 店舗マスタ読み込み完了（登録店舗数: {len(master_df)}店舗）。毎回の再アップロードは不要です。")
 else:
-    st.warning("⚠️ 店舗マスタ（店舗.xlsx）が読み込まれていません。")
+    st.warning("⚠️ 店舗マスタが登録されていません。GitHubリポジトリに `店舗.xlsx` を配置するか、上記からアップロードしてください。")
 
 # 2. 調査対象日の設定
 st.subheader("2. 調査対象日の設定")
@@ -254,7 +260,6 @@ if start_btn:
 
                 new_df_results = pd.DataFrame(result_data)
                 
-                # 店舗名の自動補正
                 if not new_df_results.empty:
                     new_df_results = normalize_and_fix_store_names(new_df_results, master_df)
                     for col in new_df_results.columns:
@@ -284,7 +289,6 @@ df_results = st.session_state["accumulated_results"]
 df_unreadable = st.session_state["accumulated_unreadable"]
 
 if not df_results.empty or not df_unreadable.empty:
-    # 未提出店舗の抽出
     df_unsubmitted = pd.DataFrame()
     if master_df is not None and "店舗名" in master_df.columns:
         if not df_results.empty and ("現金を高" in df_results.columns or "現金在高" in df_results.columns):
@@ -299,7 +303,6 @@ if not df_results.empty or not df_unreadable.empty:
         for col in df_unsubmitted.columns:
             df_unsubmitted[col] = df_unsubmitted[col].astype(str)
 
-    # 画面表示（タブ分け）
     tab1, tab2, tab3 = st.tabs([
         f"📊 照合結果（累計: {len(df_results)}件）", 
         f"⚠️ 未提出店舗一覧（{len(df_unsubmitted)}店舗）" if not df_unsubmitted.empty else "⚠️ 未提出店舗一覧",
@@ -334,7 +337,6 @@ if not df_results.empty or not df_unreadable.empty:
         else:
             st.success("判別不能・無視された画像はありません。")
 
-    # Excelファイル生成
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         if not df_results.empty:
