@@ -222,13 +222,20 @@ st.markdown("店舗からの売上日計表画像を自動照合し、全店舗�
 # SecretsからAPIキーを取得
 api_key = st.secrets.get("GEMINI_API_KEY")
 
-# 1. 調査対象日の設定
+# 1. 調査対象日の設定（初期値：前日 / 上限：前日＝本日以降選択不可）
+yesterday = datetime.date.today() - datetime.timedelta(days=1)
+
 st.subheader("1. 調査対象日の設定")
 col1, col2 = st.columns([1, 2])
 with col1:
     ignore_date_check = st.checkbox("調査対象日を指定しない（すべての画像を取り込む）", value=False)
 with col2:
-    target_date = st.date_input("調査対象日を選択してください", datetime.date.today(), disabled=ignore_date_check)
+    target_date = st.date_input(
+        "調査対象日を選択してください", 
+        value=yesterday, 
+        max_value=yesterday,
+        disabled=ignore_date_check
+    )
 
 target_date_str = "指定なし（全日付を照合対象とする）" if ignore_date_check else target_date.strftime("%Y/%m/%d")
 
